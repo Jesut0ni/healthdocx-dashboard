@@ -64,6 +64,8 @@ npm run db:seed
 npm run backend:dev
 ```
 
+`npm run db:seed` and `npm run db:reset-live` intentionally reset dashboard data. They delete tasks, projects, work batches, integrations, docs, reminder logs, and audit history, then recreate only the six approved HealthDocX users and clean email reminder schedules. Use this before the first production deploy when the database must start fresh.
+
 The frontend defaults to `http://localhost:4000` for API calls during local development and uses same-origin `/api` calls in production. Set `NEXT_PUBLIC_API_BASE_URL` only if the backend is deployed to a separate URL.
 
 Login uses each seeded team member email, such as `terry@healthdocx.org`, plus the shared `APP_ACCESS_CODE` from `backend/.env`.
@@ -135,5 +137,4 @@ npm run build
 3. Add Slack and WhatsApp delivery channels after email is configured.
 4. Add edit/delete endpoints where the team needs them beyond the current create/status/assignment/access flows.
 5. Polish production deployment settings for the frontend and backend.
-6. Decide which private details must stay out of task titles before connecting external systems.
-7. Add automated tests for permissions, task state changes, reminders, and work batch workflows.
+6. Add automated tests for permissions, task state changes, reminders, and work batch workflows.

@@ -23,9 +23,9 @@ function task(overrides: Partial<Task> = {}): Task {
   return {
     id: "HDX-TEST",
     title: "Validate encrypted storage retention settings",
-    project: "Team access setup",
+    project: "Internal setup",
     workstream: "Security",
-    owner: "Ife",
+    owner: "Terry",
     status: "Backlog",
     priority: "High",
     due: "Jul 16",

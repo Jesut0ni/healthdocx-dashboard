@@ -12,6 +12,7 @@ import {
   ClipboardList,
   Clock3,
   DatabaseZap,
+  FileCheck2,
   FileText,
   Gauge,
   History,
@@ -73,16 +74,7 @@ import type {
   ReminderLog,
   ReminderRule,
 } from "@/lib/healthdocx-api";
-import {
-  assignees,
-  auditEvents as initialAuditEvents,
-  docs as initialDocs,
-  projects as initialProjects,
-  initialTasks,
-  integrations as initialIntegrations,
-  workBatches as initialWorkBatches,
-  users as initialUsers,
-} from "@/lib/healthdocx-data";
+import { assignees, users as initialUsers } from "@/lib/healthdocx-data";
 import type {
   AuditEvent,
   Project,
@@ -214,15 +206,19 @@ const accessOptions: TeamUser["access"][] = [
 ];
 const userStatusOptions: TeamUser["status"][] = ["Active", "Invited", "Suspended"];
 const reminderCadenceOptions: ReminderCadence[] = ["Daily", "Twice a day", "Weekly"];
-const reminderChannelOptions: ReminderChannel[] = ["Email", "Slack", "Dashboard"];
-const initialReminderRules: ReminderRule[] = assignees.map((owner, index) => ({
-  owner,
-  cadence: index % 3 === 0 ? "Daily" : index % 3 === 1 ? "Twice a day" : "Weekly",
-  channel: index % 2 === 0 ? "Email" : "Dashboard",
-  enabled: true,
-  nextRun: index % 3 === 2 ? "Monday 09:00" : index % 3 === 1 ? "Today 16:00" : "Tomorrow 09:00",
-  lastSent: "Not sent",
-}));
+const reminderChannelOptions: ReminderChannel[] = ["Email"];
+const initialReminderRules: ReminderRule[] = assignees.map((owner, index) => {
+  const cadence = reminderCadenceOptions[index % reminderCadenceOptions.length] ?? "Daily";
+
+  return {
+    owner,
+    cadence,
+    channel: "Email",
+    enabled: true,
+    nextRun: nextReminderRun(cadence),
+    lastSent: "Not sent",
+  };
+});
 
 const priorityStyles: Record<Priority, string> = {
   Critical: "border-red-200 bg-red-50 text-red-700",
@@ -539,15 +535,13 @@ export function HealthDocXDashboard() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [activeView, setActiveView] = useState<View>("command");
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [projectItems, setProjectItems] = useState<Project[]>(initialProjects);
-  const [workBatchItems, setWorkBatchItems] =
-    useState<WorkBatch[]>(initialWorkBatches);
-  const [integrationItems, setIntegrationItems] =
-    useState<Integration[]>(initialIntegrations);
-  const [docItems, setDocItems] = useState<KnowledgeDoc[]>(initialDocs);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [projectItems, setProjectItems] = useState<Project[]>([]);
+  const [workBatchItems, setWorkBatchItems] = useState<WorkBatch[]>([]);
+  const [integrationItems, setIntegrationItems] = useState<Integration[]>([]);
+  const [docItems, setDocItems] = useState<KnowledgeDoc[]>([]);
   const [userItems, setUserItems] = useState<TeamUser[]>(initialUsers);
-  const [auditItems, setAuditItems] = useState<AuditEvent[]>(initialAuditEvents);
+  const [auditItems, setAuditItems] = useState<AuditEvent[]>([]);
   const [reminderRules, setReminderRules] = useState<ReminderRule[]>(initialReminderRules);
   const [reminderLogs, setReminderLogs] = useState<ReminderLog[]>([]);
   const [query, setQuery] = useState("");
@@ -603,7 +597,10 @@ export function HealthDocXDashboard() {
     setReminderRules(data.reminderRules.length > 0 ? data.reminderRules : initialReminderRules);
     setReminderLogs(data.reminderLogs);
     setSelectedReminderOwner((current) => {
-      const owners = data.reminderRules.map((rule) => rule.owner);
+      const owners =
+        data.reminderRules.length > 0
+          ? data.reminderRules.map((rule) => rule.owner)
+          : initialReminderRules.map((rule) => rule.owner);
       return owners.includes(current) ? current : owners[0] ?? assignees[0];
     });
   }, []);
@@ -704,8 +701,9 @@ export function HealthDocXDashboard() {
   const reviewTasks = tasks.filter((task) => task.status === "Review");
   const totalWorkItems = projectItems.reduce((sum, project) => sum + project.workItems, 0);
   const averageQuality =
-    workBatchItems.reduce((sum, batch) => sum + batch.qualityScore, 0) /
-    Math.max(workBatchItems.length, 1);
+    workBatchItems.length > 0
+      ? workBatchItems.reduce((sum, batch) => sum + batch.qualityScore, 0) / workBatchItems.length
+      : 0;
   const connectedIntegrations = integrationItems.filter(
     (integration) => integration.status === "Connected",
   );
@@ -1568,14 +1566,32 @@ function CommandView({
             }
           />
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {projects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                compact
-                onOpen={() => onOpenDetail({ type: "project", id: project.id })}
-              />
-            ))}
+            {projects.length > 0 ? (
+              projects.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  compact
+                  onOpen={() => onOpenDetail({ type: "project", id: project.id })}
+                />
+              ))
+            ) : (
+              <div className="lg:col-span-2">
+                <EmptyState
+                  icon={<Building2 className="h-5 w-5" />}
+                  title="No projects yet"
+                  description="Start the live workspace by creating the first HealthDocX project."
+                  action={
+                    <SecondaryButton
+                      icon={<ArrowRight className="h-4 w-4" />}
+                      onClick={() => setActiveView("projects")}
+                    >
+                      Open projects
+                    </SecondaryButton>
+                  }
+                />
+              </div>
+            )}
           </div>
         </section>
 
@@ -1583,24 +1599,34 @@ function CommandView({
           <section className="hdx-panel p-4">
             <SectionHeader eyebrow="Today" title="Command focus" />
             <div className="mt-4 space-y-3">
-              <FocusItem
-                icon={<AlertTriangle className="h-4 w-4" />}
-                title="Launch checklist"
-                detail="Dashboard launch needs final copy review before handoff."
-                tone="red"
-              />
-              <FocusItem
-                icon={<ShieldCheck className="h-4 w-4" />}
-                title="Access review"
-                detail="Team access setup needs owner confirmation."
-                tone="amber"
-              />
-              <FocusItem
-                icon={<Workflow className="h-4 w-4" />}
-                title="Reminder workflow"
-                detail="Twice-daily reminder schedule is ready for validation."
-                tone="cyan"
-              />
+              {projects.length === 0 && openTasks === 0 ? (
+                <EmptyState
+                  icon={<Plus className="h-5 w-5" />}
+                  title="Ready for first setup"
+                  description="Create a project, then add work items and owners for the team."
+                />
+              ) : (
+                <>
+                  <FocusItem
+                    icon={<AlertTriangle className="h-4 w-4" />}
+                    title="Open work"
+                    detail={`${openTasks} work item${openTasks === 1 ? "" : "s"} need owner follow-up.`}
+                    tone="red"
+                  />
+                  <FocusItem
+                    icon={<ShieldCheck className="h-4 w-4" />}
+                    title="Access review"
+                    detail="Keep the six-person team access list current before sharing the live URL."
+                    tone="amber"
+                  />
+                  <FocusItem
+                    icon={<Workflow className="h-4 w-4" />}
+                    title="Reminder delivery"
+                    detail="Email reminders are ready once tasks are assigned."
+                    tone="cyan"
+                  />
+                </>
+              )}
             </div>
           </section>
 
@@ -1627,13 +1653,21 @@ function CommandView({
             }
           />
           <div className="mt-4 space-y-3">
-            {workBatches.slice(0, 3).map((batch) => (
-              <WorkBatchRow
-                key={batch.id}
-                batch={batch}
-                onOpen={() => onOpenDetail({ type: "batch", id: batch.id })}
+            {workBatches.length > 0 ? (
+              workBatches.slice(0, 3).map((batch) => (
+                <WorkBatchRow
+                  key={batch.id}
+                  batch={batch}
+                  onOpen={() => onOpenDetail({ type: "batch", id: batch.id })}
+                />
+              ))
+            ) : (
+              <EmptyState
+                icon={<Layers3 className="h-5 w-5" />}
+                title="No work batches yet"
+                description="Batches will appear here after a project has work to group and review."
               />
-            ))}
+            )}
           </div>
         </section>
 
@@ -1652,14 +1686,22 @@ function CommandView({
             }
           />
           <div className="mt-4 space-y-3">
-            {integrations.slice(0, 3).map((integration) => (
-              <IntegrationRow
-                key={integration.id}
-                integration={integration}
-                compact
-                onOpen={() => onOpenDetail({ type: "integration", id: integration.id })}
+            {integrations.length > 0 ? (
+              integrations.slice(0, 3).map((integration) => (
+                <IntegrationRow
+                  key={integration.id}
+                  integration={integration}
+                  compact
+                  onOpen={() => onOpenDetail({ type: "integration", id: integration.id })}
+                />
+              ))
+            ) : (
+              <EmptyState
+                icon={<Network className="h-5 w-5" />}
+                title="No integrations yet"
+                description="Add integrations only when a project needs a system connection."
               />
-            ))}
+            )}
           </div>
         </section>
       </div>
@@ -1990,7 +2032,7 @@ function ReminderCenter({
           icon={<Mail className="h-4 w-4" />}
           label="Sent this session"
           value={reminderLogs.length.toString()}
-          detail="Email, Slack, or dashboard"
+          detail="Email delivery"
         />
       </div>
 
@@ -2216,13 +2258,28 @@ function ProjectsView({
           }
         />
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {sortedProjects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onOpen={() => onOpenDetail(project.id)}
-            />
-          ))}
+          {sortedProjects.length > 0 ? (
+            sortedProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onOpen={() => onOpenDetail(project.id)}
+              />
+            ))
+          ) : (
+            <div className="lg:col-span-2">
+              <EmptyState
+                icon={<Building2 className="h-5 w-5" />}
+                title="No projects yet"
+                description="Create the first project to begin assigning work, batches, docs, and integrations."
+                action={
+                  <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={onCreateProject}>
+                    Add project
+                  </PrimaryButton>
+                }
+              />
+            </div>
+          )}
         </div>
       </section>
 
@@ -2236,48 +2293,58 @@ function ProjectsView({
             </SecondaryButton>
           }
         />
-        <div className="mt-4 overflow-x-auto rounded-md border border-[#C1C9BE]/70">
-          <table className="w-full min-w-[840px] border-collapse text-sm">
-            <thead className="bg-[#F3F8F3] text-left text-xs uppercase text-[#717970]">
-              <tr>
-                <th className="px-4 py-3 font-semibold">Project</th>
-                <th className="px-4 py-3 font-semibold">Stage</th>
-                <th className="px-4 py-3 font-semibold">Owner</th>
-                <th className="px-4 py-3 font-semibold">Work items</th>
-                <th className="px-4 py-3 font-semibold">Target</th>
-                <th className="px-4 py-3 font-semibold">Risk</th>
-                <th className="px-4 py-3 font-semibold"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#C1C9BE]/70">
-              {sortedProjects.map((project) => (
-                <tr key={project.id}>
-                  <td className="px-4 py-4">
-                    <p className="font-semibold text-[#0E1F12]">{project.name}</p>
-                    <p className="mt-1 text-xs text-[#717970]">{project.area}</p>
-                  </td>
-                  <td className="px-4 py-4 text-[#414941]">{project.stage}</td>
-                  <td className="px-4 py-4 text-[#414941]">{project.owner}</td>
-                  <td className="px-4 py-4 text-[#414941]">{project.workItems}</td>
-                  <td className="px-4 py-4 text-[#414941]">{project.targetDate}</td>
-                  <td className="px-4 py-4">
-                    <Badge className={riskStyles[project.risk]}>{project.risk}</Badge>
-                  </td>
-                  <td className="px-4 py-4 text-right">
-                    <button
-                      type="button"
-                      onClick={() => onOpenDetail(project.id)}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-[#C1C9BE]/70 px-3 text-sm font-semibold text-[#414941] transition hover:border-[#008943] hover:bg-[#B4F1BD]/25 hover:text-[#006D34]"
-                    >
-                      Details
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                  </td>
+        {sortedProjects.length > 0 ? (
+          <div className="mt-4 overflow-x-auto rounded-md border border-[#C1C9BE]/70">
+            <table className="w-full min-w-[840px] border-collapse text-sm">
+              <thead className="bg-[#F3F8F3] text-left text-xs uppercase text-[#717970]">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Project</th>
+                  <th className="px-4 py-3 font-semibold">Stage</th>
+                  <th className="px-4 py-3 font-semibold">Owner</th>
+                  <th className="px-4 py-3 font-semibold">Work items</th>
+                  <th className="px-4 py-3 font-semibold">Target</th>
+                  <th className="px-4 py-3 font-semibold">Risk</th>
+                  <th className="px-4 py-3 font-semibold"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-[#C1C9BE]/70">
+                {sortedProjects.map((project) => (
+                  <tr key={project.id}>
+                    <td className="px-4 py-4">
+                      <p className="font-semibold text-[#0E1F12]">{project.name}</p>
+                      <p className="mt-1 text-xs text-[#717970]">{project.area}</p>
+                    </td>
+                    <td className="px-4 py-4 text-[#414941]">{project.stage}</td>
+                    <td className="px-4 py-4 text-[#414941]">{project.owner}</td>
+                    <td className="px-4 py-4 text-[#414941]">{project.workItems}</td>
+                    <td className="px-4 py-4 text-[#414941]">{project.targetDate}</td>
+                    <td className="px-4 py-4">
+                      <Badge className={riskStyles[project.risk]}>{project.risk}</Badge>
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onOpenDetail(project.id)}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-[#C1C9BE]/70 px-3 text-sm font-semibold text-[#414941] transition hover:border-[#008943] hover:bg-[#B4F1BD]/25 hover:text-[#006D34]"
+                      >
+                        Details
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <EmptyState
+              icon={<FileCheck2 className="h-5 w-5" />}
+              title="No launch controls yet"
+              description="Project controls will populate after the first project is added."
+            />
+          </div>
+        )}
       </section>
 
       <section className="hdx-panel p-4">
@@ -2318,13 +2385,23 @@ function ProjectsView({
           </div>
         </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {sortedBatches.map((batch) => (
-            <WorkBatchRow
-              key={batch.id}
-              batch={batch}
-              onOpen={() => onOpenBatchDetail(batch.id)}
-            />
-          ))}
+          {sortedBatches.length > 0 ? (
+            sortedBatches.map((batch) => (
+              <WorkBatchRow
+                key={batch.id}
+                batch={batch}
+                onOpen={() => onOpenBatchDetail(batch.id)}
+              />
+            ))
+          ) : (
+            <div className="lg:col-span-2">
+              <EmptyState
+                icon={<Layers3 className="h-5 w-5" />}
+                title="No work batches yet"
+                description="Create batches after a project has grouped work that needs review."
+              />
+            </div>
+          )}
         </div>
       </section>
 
@@ -2390,13 +2467,28 @@ function IntegrationsView({
         }
       />
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {sortedIntegrations.map((integration) => (
-          <IntegrationPanel
-            key={integration.id}
-            integration={integration}
-            onOpen={() => onOpenDetail(integration.id)}
-          />
-        ))}
+        {sortedIntegrations.length > 0 ? (
+          sortedIntegrations.map((integration) => (
+            <IntegrationPanel
+              key={integration.id}
+              integration={integration}
+              onOpen={() => onOpenDetail(integration.id)}
+            />
+          ))
+        ) : (
+          <div className="lg:col-span-2">
+            <EmptyState
+              icon={<Network className="h-5 w-5" />}
+              title="No integrations yet"
+              description="Connect systems only after the team has a project that needs one."
+              action={
+                <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={onCreateIntegration}>
+                  New integration
+                </PrimaryButton>
+              }
+            />
+          </div>
+        )}
       </div>
     </section>
   );
@@ -2451,48 +2543,63 @@ function DocsView({
           </div>
         }
       />
-      <div className="mt-4 overflow-x-auto rounded-md border border-[#C1C9BE]/70">
-        <table className="w-full min-w-[760px] border-collapse text-sm">
-          <thead className="bg-[#F3F8F3] text-left text-xs uppercase text-[#717970]">
-            <tr>
-              <th className="px-4 py-3 font-semibold">Document</th>
-              <th className="px-4 py-3 font-semibold">Area</th>
-              <th className="px-4 py-3 font-semibold">Owner</th>
-              <th className="px-4 py-3 font-semibold">Updated</th>
-              <th className="px-4 py-3 font-semibold">Status</th>
-              <th className="px-4 py-3 font-semibold"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#C1C9BE]/70">
-            {sortedDocs.map((doc) => (
-              <tr key={doc.id}>
-                <td className="px-4 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-9 w-9 place-items-center rounded-md bg-[#B4F1BD]/25 text-[#008943]">
-                      <FileText className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <p className="font-semibold text-[#0E1F12]">{doc.title}</p>
-                      <p className="mt-1 text-xs text-[#717970]">{doc.id}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-4 py-4 text-[#414941]">{doc.area}</td>
-                <td className="px-4 py-4 text-[#414941]">{doc.owner}</td>
-                <td className="px-4 py-4 text-[#414941]">{doc.updated}</td>
-                <td className="px-4 py-4">
-                  <Badge className={docStatusStyles[doc.status]}>{doc.status}</Badge>
-                </td>
-                <td className="px-4 py-4 text-right">
-                  <IconButton label={`Open ${doc.title}`} onClick={() => onOpenDetail(doc.id)}>
-                    <ArrowRight className="h-4 w-4" />
-                  </IconButton>
-                </td>
+      {sortedDocs.length > 0 ? (
+        <div className="mt-4 overflow-x-auto rounded-md border border-[#C1C9BE]/70">
+          <table className="w-full min-w-[760px] border-collapse text-sm">
+            <thead className="bg-[#F3F8F3] text-left text-xs uppercase text-[#717970]">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Document</th>
+                <th className="px-4 py-3 font-semibold">Area</th>
+                <th className="px-4 py-3 font-semibold">Owner</th>
+                <th className="px-4 py-3 font-semibold">Updated</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold"></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-[#C1C9BE]/70">
+              {sortedDocs.map((doc) => (
+                <tr key={doc.id}>
+                  <td className="px-4 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="grid h-9 w-9 place-items-center rounded-md bg-[#B4F1BD]/25 text-[#008943]">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-[#0E1F12]">{doc.title}</p>
+                        <p className="mt-1 text-xs text-[#717970]">{doc.id}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 text-[#414941]">{doc.area}</td>
+                  <td className="px-4 py-4 text-[#414941]">{doc.owner}</td>
+                  <td className="px-4 py-4 text-[#414941]">{doc.updated}</td>
+                  <td className="px-4 py-4">
+                    <Badge className={docStatusStyles[doc.status]}>{doc.status}</Badge>
+                  </td>
+                  <td className="px-4 py-4 text-right">
+                    <IconButton label={`Open ${doc.title}`} onClick={() => onOpenDetail(doc.id)}>
+                      <ArrowRight className="h-4 w-4" />
+                    </IconButton>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="mt-4">
+          <EmptyState
+            icon={<BookOpenText className="h-5 w-5" />}
+            title="No documents yet"
+            description="Add runbooks, policies, or technical notes after the live workspace is set up."
+            action={
+              <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={onCreateDoc}>
+                New doc
+              </PrimaryButton>
+            }
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -2633,6 +2740,13 @@ function CreateEntityModal({
       lastSent: "Not sent",
     };
 
+  if (
+    projectNames.length === 0 &&
+    (activeModal === "task" || activeModal === "batch" || activeModal === "integration")
+  ) {
+    return <ProjectRequiredModal onClose={onClose} />;
+  }
+
   if (activeModal === "task") {
     return (
       <TaskFormModal
@@ -2686,6 +2800,30 @@ function CreateEntityModal({
   }
 
   return null;
+}
+
+function ProjectRequiredModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal
+      open
+      title="Create a project first"
+      description="Tasks, work batches, and integrations need a project to belong to."
+      onClose={onClose}
+    >
+      <div className="grid gap-4">
+        <InlineNotice
+          tone="green"
+          title="Fresh workspace"
+          detail="The live database starts clean. Add the first project from the Projects page, then create work items for it."
+        />
+        <div className="flex justify-end">
+          <PrimaryButton icon={<ArrowRight className="h-4 w-4" />} onClick={onClose}>
+            Go back
+          </PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 function ModalActions({ onCancel }: { onCancel: () => void }) {
@@ -2889,7 +3027,7 @@ function IntegrationFormModal({
   ) => void;
 }) {
   const [project, setProject] = useState(projects[0] ?? "");
-  const [system, setSystem] = useState("Slack");
+  const [system, setSystem] = useState("Email");
   const [method, setMethod] = useState<Integration["method"]>("API");
   const [status, setStatus] = useState<Integration["status"]>("Mapping");
 
@@ -3480,6 +3618,18 @@ function FocusItem({
 }
 
 function AuditList({ auditEvents }: { auditEvents: AuditEvent[] }) {
+  if (auditEvents.length === 0) {
+    return (
+      <div className="mt-4">
+        <EmptyState
+          icon={<History className="h-5 w-5" />}
+          title="No audit events yet"
+          description="System activity will appear here after the team starts making changes."
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="mt-4 space-y-4">
       {auditEvents.map((event) => (

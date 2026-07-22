@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx backend/src/db/seed.ts",
+    "db:reset-live": "tsx backend/src/db/seed.ts",
     "reminders:worker": "tsx backend/src/workers/reminder-worker.ts",
     "start": "next start",
     "lint": "eslint",

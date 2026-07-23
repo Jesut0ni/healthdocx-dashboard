@@ -117,6 +117,7 @@ Useful backend endpoints:
 - `POST /api/integrations`
 - `POST /api/docs`
 - `POST /api/users`
+- `DELETE /api/users/:id`
 - `PATCH /api/users/:id/access`
 - `PATCH /api/users/:id/status`
 - `PATCH /api/reminders/:owner`

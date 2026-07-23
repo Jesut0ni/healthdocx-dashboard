@@ -71,6 +71,7 @@ export type TeamUser = {
   id: string;
   name: string;
   shortName?: string;
+  email: string;
   role: string;
   team: "Engineering" | "Operations" | "Product" | "Security" | "Customer Success";
   access: "Owner" | "Admin" | "Reviewer" | "Editor" | "Viewer";

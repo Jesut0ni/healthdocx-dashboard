@@ -30,6 +30,7 @@ import {
   Search,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   UserCog,
   Users,
   Workflow,
@@ -55,6 +56,7 @@ import {
   createBackendProject,
   createBackendTask,
   createBackendWorkBatch,
+  deleteBackendUser,
   fetchAuthBootstrapStatus,
   fetchCurrentAuthSession,
   fetchDashboardBootstrap,
@@ -143,6 +145,7 @@ type ResolvedDetail =
   | { type: "doc"; item?: KnowledgeDoc }
   | { type: "user"; item?: TeamUser }
   | null;
+type InviteUserInput = Omit<TeamUser, "id" | "shortName" | "status">;
 type BackendStatus = "syncing" | "connected" | "local";
 
 const priorityOptions: Priority[] = ["Critical", "High", "Medium", "Low"];
@@ -1204,7 +1207,7 @@ export function HealthDocXDashboard() {
     setActiveModal(null);
   }
 
-  async function inviteUser(input: Omit<TeamUser, "id" | "status">) {
+  async function inviteUser(input: InviteUserInput) {
     if (backendStatus !== "local") {
       try {
         await inviteBackendUser(input);
@@ -1227,6 +1230,69 @@ export function HealthDocXDashboard() {
     addAudit("Access", `invited ${user.name} as ${user.access}`);
     showToast(`${user.name} invited.`);
     setActiveModal(null);
+  }
+
+  function deleteUser(userId: string) {
+    const user = userItems.find((item) => item.id === userId);
+
+    if (!user) {
+      return;
+    }
+
+    setConfirmation({
+      title: "Delete user",
+      description: `Delete ${user.name}? This removes their account and reminder schedule. Users who own tasks, projects, or docs must be reassigned first.`,
+      confirmLabel: "Delete user",
+      onConfirm: () => {
+        void (async () => {
+          if (backendStatus !== "local") {
+            try {
+              await deleteBackendUser(userId);
+              await refreshFromBackend(true);
+              setDetailSelection(null);
+              setConfirmation(null);
+              showToast(`${user.name} deleted.`);
+              return;
+            } catch (error) {
+              markBackendFallback(error);
+            }
+          }
+
+          const userOwnerKey = ownerKey(user);
+          const ownsWork =
+            projectItems.some((project) => project.owner === userOwnerKey) ||
+            tasks.some((task) => task.owner === userOwnerKey) ||
+            docItems.some((doc) => doc.owner === userOwnerKey);
+          const remainingActiveOwners = userItems.filter(
+            (item) => item.id !== userId && item.access === "Owner" && item.status !== "Suspended",
+          );
+
+          if (user.access === "Owner" && user.status !== "Suspended" && remainingActiveOwners.length === 0) {
+            showToast("Add another active Owner before deleting this user.");
+            setConfirmation(null);
+            return;
+          }
+
+          if (ownsWork) {
+            showToast("Reassign this user's projects, tasks, and docs before deleting them.");
+            setConfirmation(null);
+            return;
+          }
+
+          setUserItems((current) => current.filter((item) => item.id !== userId));
+          setReminderRules((current) =>
+            current.filter((rule) => rule.ownerId !== userId && rule.owner !== userOwnerKey),
+          );
+          setReminderLogs((current) =>
+            current.filter((log) => log.ownerId !== userId && log.owner !== userOwnerKey),
+          );
+          addAudit("Access", `deleted user ${user.name}`);
+          setDetailSelection(null);
+          setConfirmation(null);
+          showToast(`${user.name} deleted.`);
+        })();
+      },
+    });
   }
 
   function updateUserAccess(userId: string, access: TeamUser["access"]) {
@@ -1565,6 +1631,7 @@ export function HealthDocXDashboard() {
         ownerOptions={ownerOptions}
         onUpdateUserAccess={updateUserAccess}
         onUpdateUserStatus={updateUserStatus}
+        onDeleteUser={deleteUser}
       />
       <ConfirmDialog
         open={Boolean(confirmation)}
@@ -2745,10 +2812,11 @@ function UsersView({
           }
         />
         <div className="mt-4 overflow-x-auto rounded-md border border-[#C1C9BE]/70">
-          <table className="w-full min-w-[820px] border-collapse text-sm">
+          <table className="w-full min-w-[960px] border-collapse text-sm">
             <thead className="bg-[#F3F8F3] text-left text-xs uppercase text-[#717970]">
               <tr>
                 <th className="px-4 py-3 font-semibold">User</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Team</th>
                 <th className="px-4 py-3 font-semibold">Access</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
@@ -2769,6 +2837,7 @@ function UsersView({
                       </div>
                     </div>
                   </td>
+                  <td className="px-4 py-4 text-[#414941]">{user.email}</td>
                   <td className="px-4 py-4 text-[#414941]">{user.team}</td>
                   <td className="px-4 py-4">
                     <Badge className={accessStyles[user.access]}>{user.access}</Badge>
@@ -2829,7 +2898,7 @@ function CreateEntityModal({
     input: Omit<Integration, "id" | "mappingProgress" | "lastSync" | "openIssues">,
   ) => void;
   onCreateDoc: (input: Omit<KnowledgeDoc, "id" | "updated">) => void;
-  onInviteUser: (input: Omit<TeamUser, "id" | "status">) => void;
+  onInviteUser: (input: InviteUserInput) => void;
   onConfigureReminder: (input: ReminderRule) => void;
 }) {
   const projectNames = projects.map((project) => project.name);
@@ -3238,9 +3307,10 @@ function InviteUserModal({
   onSubmit,
 }: {
   onClose: () => void;
-  onSubmit: (input: Omit<TeamUser, "id" | "status">) => void;
+  onSubmit: (input: InviteUserInput) => void;
 }) {
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [role, setRole] = useState("");
   const [team, setTeam] = useState<TeamUser["team"]>("Operations");
   const [access, setAccess] = useState<TeamUser["access"]>("Viewer");
@@ -3250,11 +3320,12 @@ function InviteUserModal({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit({ name, role, team, access });
+          onSubmit({ name: name.trim(), email: email.trim(), role: role.trim(), team, access });
         }}
         className="grid gap-4"
       >
         <TextField label="Full name" value={name} onChange={setName} required />
+        <TextField label="Email" value={email} onChange={setEmail} type="email" required />
         <div className="grid gap-4 md:grid-cols-2">
           <TextField label="Role" value={role} onChange={setRole} required />
           <SelectField label="Team" value={team} options={teamOptions} onChange={setTeam} />
@@ -3349,6 +3420,7 @@ function DetailDrawer({
   ownerOptions,
   onUpdateUserAccess,
   onUpdateUserStatus,
+  onDeleteUser,
 }: {
   detail: ResolvedDetail;
   onClose: () => void;
@@ -3357,6 +3429,7 @@ function DetailDrawer({
   ownerOptions: string[];
   onUpdateUserAccess: (id: string, access: TeamUser["access"]) => void;
   onUpdateUserStatus: (id: string, status: TeamUser["status"]) => void;
+  onDeleteUser: (id: string) => void;
 }) {
   if (!detail?.item) {
     return null;
@@ -3474,6 +3547,7 @@ function DetailDrawer({
   return (
     <Drawer open title={user.name} description={`${user.role} / ${user.team}`} onClose={onClose}>
       <div className="grid gap-4">
+        <DetailRow label="Email" value={user.email} />
         <DetailRow label="Status" value={user.status} />
         <SelectField
           label="Access"
@@ -3490,6 +3564,14 @@ function DetailDrawer({
         <p className="rounded-md border border-[#B4F1BD] bg-[#B4F1BD]/20 p-3 text-sm leading-6 text-[#414941]">
           Access changes require confirmation and are written to the audit trail.
         </p>
+        <button
+          type="button"
+          onClick={() => onDeleteUser(user.id)}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100"
+        >
+          <Trash2 className="h-4 w-4" />
+          Delete user
+        </button>
       </div>
     </Drawer>
   );

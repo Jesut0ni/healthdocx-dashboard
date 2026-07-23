@@ -209,10 +209,17 @@ export function createBackendDoc(input: Omit<KnowledgeDoc, "id" | "updated">) {
   });
 }
 
-export function inviteBackendUser(input: Omit<TeamUser, "id" | "status">) {
+export function inviteBackendUser(input: Omit<TeamUser, "id" | "shortName" | "status">) {
   return request("/api/users", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function deleteBackendUser(id: string) {
+  return request(`/api/users/${id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ actor: "Dashboard" }),
   });
 }
 

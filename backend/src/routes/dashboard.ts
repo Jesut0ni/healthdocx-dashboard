@@ -69,6 +69,7 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
       id: user.id,
       name: user.displayName,
       shortName: user.shortName,
+      email: user.email,
       role: user.role,
       team: user.team,
       access: user.access,

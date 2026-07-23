@@ -11,16 +11,25 @@ export type TaskStatus = "Backlog" | "In progress" | "Review" | "Blocked" | "Don
 export type Priority = "Critical" | "High" | "Medium" | "Low";
 export type Risk = "Healthy" | "Watch" | "Blocked";
 
+export type WorkComment = {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+};
+
 export type Task = {
   id: string;
   title: string;
   project: string;
   workstream: "Project Ops" | "Integrations" | "Security" | "Implementation" | "Customer Success";
   owner: string;
+  assignees: string[];
   status: TaskStatus;
   priority: Priority;
   due: string;
   comments: number;
+  commentItems: WorkComment[];
   privateDetailsClear: boolean;
 };
 
@@ -30,10 +39,13 @@ export type Project = {
   area: string;
   stage: "Discovery" | "Planning" | "Build" | "Review" | "Launch ready" | "Live";
   owner: string;
+  members: string[];
   risk: Risk;
   workItems: number;
   progress: number;
   targetDate: string;
+  comments: number;
+  commentItems: WorkComment[];
 };
 
 export type WorkBatch = {

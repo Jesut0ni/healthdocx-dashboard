@@ -1,7 +1,19 @@
 import { and, count, eq, ne } from "drizzle-orm";
 import { Router } from "express";
 import { getDb } from "../db/client";
-import { auditEvents, docs, projects, reminderLogs, reminderRules, tasks, users } from "../db/schema";
+import {
+  auditEvents,
+  docs,
+  projectComments,
+  projectMembers,
+  projects,
+  reminderLogs,
+  reminderRules,
+  taskAssignees,
+  taskComments,
+  tasks,
+  users,
+} from "../db/schema";
 import {
   accessValues,
   firstName,
@@ -157,6 +169,10 @@ usersRouter.delete("/users/:id", async (request, response) => {
 
   await db.delete(reminderLogs).where(eq(reminderLogs.ownerId, user.id));
   await db.delete(reminderRules).where(eq(reminderRules.ownerId, user.id));
+  await db.delete(projectMembers).where(eq(projectMembers.userId, user.id));
+  await db.delete(taskAssignees).where(eq(taskAssignees.userId, user.id));
+  await db.update(projectComments).set({ authorId: null }).where(eq(projectComments.authorId, user.id));
+  await db.update(taskComments).set({ authorId: null }).where(eq(taskComments.authorId, user.id));
   await db.update(auditEvents).set({ actorId: null }).where(eq(auditEvents.actorId, user.id));
   await db.delete(users).where(eq(users.id, user.id));
 

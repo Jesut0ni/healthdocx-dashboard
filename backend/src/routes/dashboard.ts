@@ -1,13 +1,17 @@
-import { count, eq, ne } from "drizzle-orm";
+import { asc, count, eq, ne } from "drizzle-orm";
 import { Router } from "express";
 import { getDb } from "../db/client";
 import {
   auditEvents,
   docs,
   integrations,
+  projectComments,
+  projectMembers,
   projects,
   reminderLogs,
   reminderRules,
+  taskAssignees,
+  taskComments,
   tasks,
   users,
   workBatches,
@@ -29,6 +33,10 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
     reminderRuleRows,
     reminderLogRows,
     pendingTaskRows,
+    projectMemberRows,
+    taskAssigneeRows,
+    projectCommentRows,
+    taskCommentRows,
   ] = await Promise.all([
     db.select().from(users),
     db.select({ project: projects, owner: users }).from(projects).leftJoin(users, eq(projects.ownerId, users.id)),
@@ -60,9 +68,71 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
       .from(tasks)
       .where(ne(tasks.status, "Done"))
       .groupBy(tasks.ownerId),
+    db
+      .select({ member: projectMembers, user: users })
+      .from(projectMembers)
+      .leftJoin(users, eq(projectMembers.userId, users.id)),
+    db
+      .select({ assignee: taskAssignees, user: users })
+      .from(taskAssignees)
+      .leftJoin(users, eq(taskAssignees.userId, users.id)),
+    db.select().from(projectComments).orderBy(asc(projectComments.createdAt)),
+    db.select().from(taskComments).orderBy(asc(taskComments.createdAt)),
   ]);
 
   const pendingTaskCountByOwner = new Map(pendingTaskRows.map((row) => [row.ownerId, row.total]));
+  const projectMembersByProjectId = new Map<string, string[]>();
+  const taskAssigneesByTaskId = new Map<string, string[]>();
+  const projectCommentsByProjectId = new Map<
+    string,
+    Array<{ id: string; author: string; body: string; createdAt: string }>
+  >();
+  const taskCommentsByTaskId = new Map<
+    string,
+    Array<{ id: string; author: string; body: string; createdAt: string }>
+  >();
+
+  for (const { member, user } of projectMemberRows) {
+    if (!user) {
+      continue;
+    }
+
+    const currentMembers = projectMembersByProjectId.get(member.projectId) ?? [];
+    currentMembers.push(user.shortName);
+    projectMembersByProjectId.set(member.projectId, currentMembers);
+  }
+
+  for (const { assignee, user } of taskAssigneeRows) {
+    if (!user) {
+      continue;
+    }
+
+    const currentAssignees = taskAssigneesByTaskId.get(assignee.taskId) ?? [];
+    currentAssignees.push(user.shortName);
+    taskAssigneesByTaskId.set(assignee.taskId, currentAssignees);
+  }
+
+  for (const comment of projectCommentRows) {
+    const currentComments = projectCommentsByProjectId.get(comment.projectId) ?? [];
+    currentComments.push({
+      id: comment.id,
+      author: comment.authorName,
+      body: comment.body,
+      createdAt: comment.createdAt.toISOString(),
+    });
+    projectCommentsByProjectId.set(comment.projectId, currentComments);
+  }
+
+  for (const comment of taskCommentRows) {
+    const currentComments = taskCommentsByTaskId.get(comment.taskId) ?? [];
+    currentComments.push({
+      id: comment.id,
+      author: comment.authorName,
+      body: comment.body,
+      createdAt: comment.createdAt.toISOString(),
+    });
+    taskCommentsByTaskId.set(comment.taskId, currentComments);
+  }
 
   response.json({
     users: userRows.map((user) => ({
@@ -81,10 +151,13 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
       area: project.area,
       stage: project.stage,
       owner: owner?.shortName ?? "Unassigned",
+      members: projectMembersByProjectId.get(project.id) ?? [],
       risk: project.risk,
       workItems: project.workItems,
       progress: project.progress,
       targetDate: project.targetDate,
+      comments: projectCommentsByProjectId.get(project.id)?.length ?? 0,
+      commentItems: projectCommentsByProjectId.get(project.id) ?? [],
     })),
     tasks: taskRows.map(({ task, project, owner }) => ({
       id: task.id,
@@ -92,10 +165,12 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
       project: project?.name ?? "Unassigned project",
       workstream: task.workstream,
       owner: owner?.shortName ?? "Unassigned",
+      assignees: taskAssigneesByTaskId.get(task.id) ?? [],
       status: task.status,
       priority: task.priority,
       due: task.due,
-      comments: task.comments,
+      comments: Math.max(task.comments, taskCommentsByTaskId.get(task.id)?.length ?? 0),
+      commentItems: taskCommentsByTaskId.get(task.id) ?? [],
       privateDetailsClear: task.privateDetailsClear,
     })),
     workBatches: batchRows.map(({ batch, project }) => ({

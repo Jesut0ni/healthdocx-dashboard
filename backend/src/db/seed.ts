@@ -3,9 +3,13 @@ import {
   auditEvents,
   docs,
   integrations,
+  projectComments,
+  projectMembers,
   projects,
   reminderLogs,
   reminderRules,
+  taskAssignees,
+  taskComments,
   tasks,
   users,
   workBatches,
@@ -14,6 +18,10 @@ import {
 async function seed() {
   const db = getDb();
 
+  await db.delete(taskComments);
+  await db.delete(projectComments);
+  await db.delete(taskAssignees);
+  await db.delete(projectMembers);
   await db.delete(reminderLogs);
   await db.delete(reminderRules);
   await db.delete(auditEvents);

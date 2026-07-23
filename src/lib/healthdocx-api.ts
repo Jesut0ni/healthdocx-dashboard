@@ -156,7 +156,7 @@ export function fetchDashboardBootstrap() {
   return request<DashboardBootstrap>("/api/dashboard/bootstrap");
 }
 
-export function createBackendTask(input: Omit<Task, "id" | "comments">) {
+export function createBackendTask(input: Omit<Task, "id" | "comments" | "commentItems">) {
   return request("/api/tasks", {
     method: "POST",
     body: JSON.stringify(input),
@@ -177,10 +177,38 @@ export function updateBackendTaskOwner(id: string, owner: string) {
   });
 }
 
-export function createBackendProject(input: Omit<Project, "id">) {
+export function updateBackendTaskAssignees(id: string, assignees: string[]) {
+  return request(`/api/tasks/${id}/assignees`, {
+    method: "PATCH",
+    body: JSON.stringify({ assignees, actor: "Dashboard" }),
+  });
+}
+
+export function createBackendTaskComment(id: string, body: string, author?: string) {
+  return request(`/api/tasks/${id}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body, author }),
+  });
+}
+
+export function createBackendProject(input: Omit<Project, "id" | "comments" | "commentItems">) {
   return request("/api/projects", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function updateBackendProjectMembers(id: string, members: string[]) {
+  return request(`/api/projects/${id}/members`, {
+    method: "PATCH",
+    body: JSON.stringify({ members, actor: "Dashboard" }),
+  });
+}
+
+export function createBackendProjectComment(id: string, body: string, author?: string) {
+  return request(`/api/projects/${id}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body, author }),
   });
 }
 

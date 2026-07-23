@@ -53,8 +53,10 @@ import {
   clearAuthSession,
   createBackendDoc,
   createBackendIntegration,
+  createBackendProjectComment,
   createBackendProject,
   createBackendTask,
+  createBackendTaskComment,
   createBackendWorkBatch,
   deleteBackendUser,
   fetchAuthBootstrapStatus,
@@ -66,6 +68,8 @@ import {
   sendBackendReminders,
   storeAuthSession,
   updateBackendReminderRule,
+  updateBackendProjectMembers,
+  updateBackendTaskAssignees,
   updateBackendTaskOwner,
   updateBackendTaskStatus,
   updateBackendUserAccess,
@@ -91,6 +95,7 @@ import type {
   TaskStatus,
   TeamUser,
   View,
+  WorkComment,
 } from "@/lib/healthdocx-data";
 import {
   getAllowedTaskStatuses,
@@ -146,6 +151,8 @@ type ResolvedDetail =
   | { type: "user"; item?: TeamUser }
   | null;
 type InviteUserInput = Omit<TeamUser, "id" | "shortName" | "status">;
+type CreateTaskInput = Omit<Task, "id" | "comments" | "commentItems">;
+type CreateProjectInput = Omit<Project, "id" | "comments" | "commentItems">;
 type BackendStatus = "syncing" | "connected" | "local";
 
 const priorityOptions: Priority[] = ["Critical", "High", "Medium", "Low"];
@@ -219,6 +226,24 @@ function firstName(value: string) {
 
 function ownerKey(user: TeamUser) {
   return user.shortName ?? firstName(user.name);
+}
+
+function uniquePeople(values: string[], excluded?: string) {
+  const seen = new Set<string>();
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value) => value !== excluded)
+    .filter((value) => {
+      const key = value.toLowerCase();
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
 }
 
 function createDefaultReminderRule(owner: string, index = 0): ReminderRule {
@@ -767,6 +792,7 @@ export function HealthDocXDashboard() {
         task.title,
         task.project,
         task.owner,
+        ...task.assignees,
         task.status,
         task.workstream,
       ]
@@ -775,7 +801,8 @@ export function HealthDocXDashboard() {
       const matchesSearch = !search || searchable.includes(search);
       const matchesPriority = priority === "All" || task.priority === priority;
       const matchesProject = projectFilter === "All" || task.project === projectFilter;
-      const matchesOwner = ownerFilter === "All" || task.owner === ownerFilter;
+      const matchesOwner =
+        ownerFilter === "All" || task.owner === ownerFilter || task.assignees.includes(ownerFilter);
 
       return matchesSearch && matchesPriority && matchesProject && matchesOwner;
     });
@@ -911,10 +938,162 @@ export function HealthDocXDashboard() {
     }
 
     setTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, owner } : task)),
+      current.map((task) =>
+        task.id === id ? { ...task, owner, assignees: uniquePeople(task.assignees, owner) } : task,
+      ),
     );
     addAudit("Projects", `assigned ${id} to ${owner}`);
     showToast(`Task ${id} assigned to ${owner}.`);
+  }
+
+  async function updateTaskAssignees(id: string, assignees: string[]) {
+    const task = tasks.find((item) => item.id === id);
+
+    if (!task) {
+      return;
+    }
+
+    const nextAssignees = uniquePeople(assignees, task.owner);
+
+    if (backendStatus !== "local") {
+      try {
+        await updateBackendTaskAssignees(id, nextAssignees);
+        await refreshFromBackend(true);
+        showToast(`Task ${id} collaborators updated.`);
+        return;
+      } catch (error) {
+        markBackendFallback(error);
+      }
+    }
+
+    setTasks((current) =>
+      current.map((item) => (item.id === id ? { ...item, assignees: nextAssignees } : item)),
+    );
+    addAudit("Projects", `updated collaborators for ${id}`);
+    showToast(`Task ${id} collaborators updated.`);
+  }
+
+  async function updateProjectMembers(id: string, members: string[]) {
+    const project = projectItems.find((item) => item.id === id);
+
+    if (!project) {
+      return;
+    }
+
+    const nextMembers = uniquePeople(members, project.owner);
+
+    if (backendStatus !== "local") {
+      try {
+        await updateBackendProjectMembers(id, nextMembers);
+        await refreshFromBackend(true);
+        showToast(`${project.name} members updated.`);
+        return;
+      } catch (error) {
+        markBackendFallback(error);
+      }
+    }
+
+    setProjectItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, members: nextMembers } : item)),
+    );
+    addAudit("Projects", `updated members for ${project.name}`);
+    showToast(`${project.name} members updated.`);
+  }
+
+  async function addTaskComment(id: string, body: string) {
+    const text = body.trim();
+    const task = tasks.find((item) => item.id === id);
+
+    if (!task) {
+      return;
+    }
+
+    if (!text) {
+      showToast("Add a comment before saving.");
+      return;
+    }
+
+    const author = authSession?.user.name ?? "Dashboard";
+
+    if (backendStatus !== "local") {
+      try {
+        await createBackendTaskComment(id, text, author);
+        await refreshFromBackend(true);
+        showToast(`Comment added to ${id}.`);
+        return;
+      } catch (error) {
+        markBackendFallback(error);
+      }
+    }
+
+    const comment: WorkComment = {
+      id: nextId("TCM", task.commentItems.length + 1),
+      author,
+      body: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              comments: item.comments + 1,
+              commentItems: [...item.commentItems, comment],
+            }
+          : item,
+      ),
+    );
+    addAudit("Project Ops", `commented on ${id}`, author);
+    showToast(`Comment added to ${id}.`);
+  }
+
+  async function addProjectComment(id: string, body: string) {
+    const text = body.trim();
+    const project = projectItems.find((item) => item.id === id);
+
+    if (!project) {
+      return;
+    }
+
+    if (!text) {
+      showToast("Add a comment before saving.");
+      return;
+    }
+
+    const author = authSession?.user.name ?? "Dashboard";
+
+    if (backendStatus !== "local") {
+      try {
+        await createBackendProjectComment(id, text, author);
+        await refreshFromBackend(true);
+        showToast(`Comment added to ${project.name}.`);
+        return;
+      } catch (error) {
+        markBackendFallback(error);
+      }
+    }
+
+    const comment: WorkComment = {
+      id: nextId("PCM", project.commentItems.length + 1),
+      author,
+      body: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setProjectItems((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              comments: item.comments + 1,
+              commentItems: [...item.commentItems, comment],
+            }
+          : item,
+      ),
+    );
+    addAudit("Projects", `commented on ${project.name}`, author);
+    showToast(`Comment added to ${project.name}.`);
   }
 
   async function configureReminder(input: ReminderRule) {
@@ -1071,7 +1250,7 @@ export function HealthDocXDashboard() {
     setPriority(event.target.value as Priority | "All");
   }
 
-  async function createTask(input: Omit<Task, "id" | "comments">) {
+  async function createTask(input: CreateTaskInput) {
     const validation = validateTaskInput(input);
 
     if (!validation.valid) {
@@ -1097,6 +1276,7 @@ export function HealthDocXDashboard() {
       due: input.due.trim(),
       id: `HDX-${142 + tasks.length + 1}`,
       comments: 0,
+      commentItems: [],
     };
 
     setTasks((current) => [task, ...current]);
@@ -1105,7 +1285,7 @@ export function HealthDocXDashboard() {
     setActiveModal(null);
   }
 
-  async function createProject(input: Omit<Project, "id">) {
+  async function createProject(input: CreateProjectInput) {
     if (backendStatus !== "local") {
       try {
         await createBackendProject(input);
@@ -1121,6 +1301,8 @@ export function HealthDocXDashboard() {
     const project: Project = {
       ...input,
       id: nextId("PRJ", projectItems.length + 1),
+      comments: 0,
+      commentItems: [],
     };
 
     setProjectItems((current) => [project, ...current]);
@@ -1285,6 +1467,18 @@ export function HealthDocXDashboard() {
           );
           setReminderLogs((current) =>
             current.filter((log) => log.ownerId !== userId && log.owner !== userOwnerKey),
+          );
+          setProjectItems((current) =>
+            current.map((project) => ({
+              ...project,
+              members: project.members.filter((member) => member !== userOwnerKey),
+            })),
+          );
+          setTasks((current) =>
+            current.map((task) => ({
+              ...task,
+              assignees: task.assignees.filter((assignee) => assignee !== userOwnerKey),
+            })),
           );
           addAudit("Access", `deleted user ${user.name}`);
           setDetailSelection(null);
@@ -1628,6 +1822,10 @@ export function HealthDocXDashboard() {
         onClose={() => setDetailSelection(null)}
         onUpdateTaskStatus={updateTaskStatus}
         onUpdateTaskOwner={updateTaskOwner}
+        onUpdateTaskAssignees={updateTaskAssignees}
+        onUpdateProjectMembers={updateProjectMembers}
+        onAddTaskComment={addTaskComment}
+        onAddProjectComment={addProjectComment}
         ownerOptions={ownerOptions}
         onUpdateUserAccess={updateUserAccess}
         onUpdateUserStatus={updateUserStatus}
@@ -2891,8 +3089,8 @@ function CreateEntityModal({
   reminderOwner: string;
   reminderRules: ReminderRule[];
   onClose: () => void;
-  onCreateTask: (input: Omit<Task, "id" | "comments">) => void;
-  onCreateProject: (input: Omit<Project, "id">) => void;
+  onCreateTask: (input: CreateTaskInput) => void;
+  onCreateProject: (input: CreateProjectInput) => void;
   onCreateBatch: (input: Omit<WorkBatch, "id" | "qualityScore" | "reviewItems">) => void;
   onCreateIntegration: (
     input: Omit<Integration, "id" | "mappingProgress" | "lastSync" | "openIssues">,
@@ -3059,17 +3257,19 @@ function TaskFormModal({
   projects: string[];
   ownerOptions: string[];
   onClose: () => void;
-  onSubmit: (input: Omit<Task, "id" | "comments">) => void;
+  onSubmit: (input: CreateTaskInput) => void;
 }) {
   const [title, setTitle] = useState("");
   const [project, setProject] = useState(projects[0] ?? "");
   const [workstream, setWorkstream] = useState<Task["workstream"]>("Project Ops");
   const [owner, setOwner] = useState(ownerOptions[0] ?? "");
+  const [assignees, setAssignees] = useState<string[]>([]);
   const [priority, setPriority] = useState<Priority>("High");
   const [due, setDue] = useState("Jul 30");
   const [privateDetailsClear, setPrivateDetailsClear] = useState(true);
   const [error, setError] = useState("");
   const privateDetailsRisk = hasPrivateDetailsRisk(title);
+  const assigneeOptions = ownerOptions.filter((option) => option !== owner);
 
   return (
     <Modal
@@ -3094,6 +3294,7 @@ function TaskFormModal({
             project,
             workstream,
             owner,
+            assignees: uniquePeople(assignees, owner),
             status: "Backlog",
             priority,
             due: due.trim(),
@@ -3119,11 +3320,25 @@ function TaskFormModal({
         <div className="grid gap-4 md:grid-cols-2">
           <SelectField label="Project" value={project} options={projects} onChange={setProject} />
           <SelectField label="Workstream" value={workstream} options={workstreamOptions} onChange={setWorkstream} />
-          <SelectField label="Owner" value={owner} options={ownerOptions} onChange={setOwner} />
+          <SelectField
+            label="Owner"
+            value={owner}
+            options={ownerOptions}
+            onChange={(nextOwner) => {
+              setOwner(nextOwner);
+              setAssignees((current) => uniquePeople(current, nextOwner));
+            }}
+          />
           <SelectField label="Priority" value={priority} options={priorityOptions} onChange={setPriority} />
           <TextField label="Due date" value={due} onChange={setDue} required />
           <CheckboxField label="No private details in task text" checked={privateDetailsClear} onChange={setPrivateDetailsClear} />
         </div>
+        <PersonCheckboxGroup
+          label="Additional people"
+          options={assigneeOptions}
+          selected={assignees}
+          onChange={(selected) => setAssignees(uniquePeople(selected, owner))}
+        />
         <ModalActions onCancel={onClose} />
       </form>
     </Modal>
@@ -3137,16 +3352,18 @@ function ProjectFormModal({
 }: {
   ownerOptions: string[];
   onClose: () => void;
-  onSubmit: (input: Omit<Project, "id">) => void;
+  onSubmit: (input: CreateProjectInput) => void;
 }) {
   const [name, setName] = useState("");
   const [area, setArea] = useState("Operations");
   const [stage, setStage] = useState<Project["stage"]>("Planning");
   const [owner, setOwner] = useState(ownerOptions[0] ?? "");
+  const [members, setMembers] = useState<string[]>([]);
   const [risk, setRisk] = useState<Risk>("Healthy");
   const [workItems, setWorkItems] = useState("1");
   const [progress, setProgress] = useState("5");
   const [targetDate, setTargetDate] = useState("Jul 18");
+  const memberOptions = ownerOptions.filter((option) => option !== owner);
 
   return (
     <Modal
@@ -3163,6 +3380,7 @@ function ProjectFormModal({
             area,
             stage,
             owner,
+            members: uniquePeople(members, owner),
             risk,
             workItems: Number(workItems),
             progress: Number(progress),
@@ -3175,12 +3393,26 @@ function ProjectFormModal({
         <div className="grid gap-4 md:grid-cols-2">
           <TextField label="Area" value={area} onChange={setArea} required />
           <SelectField label="Stage" value={stage} options={stageOptions} onChange={setStage} />
-          <SelectField label="Owner" value={owner} options={ownerOptions} onChange={setOwner} />
+          <SelectField
+            label="Owner"
+            value={owner}
+            options={ownerOptions}
+            onChange={(nextOwner) => {
+              setOwner(nextOwner);
+              setMembers((current) => uniquePeople(current, nextOwner));
+            }}
+          />
           <SelectField label="Risk" value={risk} options={riskOptions} onChange={setRisk} />
           <TextField label="Work items" value={workItems} onChange={setWorkItems} type="number" />
           <TextField label="Progress %" value={progress} onChange={setProgress} type="number" />
           <TextField label="Target date" value={targetDate} onChange={setTargetDate} required />
         </div>
+        <PersonCheckboxGroup
+          label="Additional people"
+          options={memberOptions}
+          selected={members}
+          onChange={(selected) => setMembers(uniquePeople(selected, owner))}
+        />
         <ModalActions onCancel={onClose} />
       </form>
     </Modal>
@@ -3412,11 +3644,175 @@ function ReminderFormModal({
   );
 }
 
+function PersonCheckboxGroup({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}) {
+  const selectedSet = new Set(selected);
+
+  return (
+    <fieldset className="grid gap-2">
+      <legend className="text-sm font-semibold text-[#07160F]">{label}</legend>
+      {options.length > 0 ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {options.map((option) => (
+            <label
+              key={option}
+              className="hdx-subpanel flex items-center gap-3 px-3 py-2 text-sm font-semibold text-[#07160F]"
+            >
+              <input
+                type="checkbox"
+                checked={selectedSet.has(option)}
+                onChange={(event) => {
+                  onChange(
+                    event.target.checked
+                      ? uniquePeople([...selected, option])
+                      : selected.filter((item) => item !== option),
+                  );
+                }}
+                className="h-4 w-4 accent-[#008943]"
+              />
+              {option}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-md border border-dashed border-[#C1C9BE] bg-[#F7FAF7] p-3 text-sm text-[#717970]">
+          No other active people to add.
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
+function PeopleList({ people, emptyLabel }: { people: string[]; emptyLabel: string }) {
+  if (people.length === 0) {
+    return <p className="text-sm text-[#717970]">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {people.map((person) => (
+        <Badge key={person} className="border-[#B4F1BD] bg-[#B4F1BD]/25 text-[#006D34]">
+          {person}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function PeopleEditor({
+  label,
+  options,
+  selected,
+  onSubmit,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onSubmit: (selected: string[]) => void;
+}) {
+  const [draft, setDraft] = useState(selected);
+
+  return (
+    <div className="grid gap-3 rounded-md border border-[#C1C9BE]/60 bg-[#F7FAF7] p-3">
+      <PersonCheckboxGroup label={label} options={options} selected={draft} onChange={setDraft} />
+      <div className="flex justify-end">
+        <SecondaryButton icon={<Users className="h-4 w-4" />} onClick={() => onSubmit(draft)}>
+          Save people
+        </SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
+function formatCommentTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function CommentPanel({
+  comments,
+  onSubmit,
+}: {
+  comments: WorkComment[];
+  onSubmit: (body: string) => void;
+}) {
+  const [body, setBody] = useState("");
+
+  return (
+    <section className="grid gap-3 rounded-md border border-[#C1C9BE]/60 bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[#07160F]">Comments</h3>
+        <Badge className="border-[#C1C9BE]/70 bg-[#F7FAF7] text-[#414941]">{comments.length}</Badge>
+      </div>
+      <div className="grid gap-2">
+        <textarea
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="Add a project or work note..."
+          rows={3}
+          className="hdx-control min-h-24 resize-y px-3 py-2 text-sm placeholder:text-[#717970]"
+        />
+        <div className="flex justify-end">
+          <PrimaryButton
+            icon={<Send className="h-4 w-4" />}
+            onClick={() => {
+              onSubmit(body);
+              setBody("");
+            }}
+          >
+            Add comment
+          </PrimaryButton>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {comments.length > 0 ? (
+          comments.map((comment) => (
+            <article key={comment.id} className="rounded-md border border-[#C1C9BE]/55 bg-[#F7FAF7] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-[#07160F]">{comment.author}</p>
+                <p className="text-xs font-medium text-[#717970]">{formatCommentTime(comment.createdAt)}</p>
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#414941]">{comment.body}</p>
+            </article>
+          ))
+        ) : (
+          <p className="rounded-md border border-dashed border-[#C1C9BE] bg-[#F7FAF7] p-3 text-sm text-[#717970]">
+            No comments yet.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function DetailDrawer({
   detail,
   onClose,
   onUpdateTaskStatus,
   onUpdateTaskOwner,
+  onUpdateTaskAssignees,
+  onUpdateProjectMembers,
+  onAddTaskComment,
+  onAddProjectComment,
   ownerOptions,
   onUpdateUserAccess,
   onUpdateUserStatus,
@@ -3426,6 +3822,10 @@ function DetailDrawer({
   onClose: () => void;
   onUpdateTaskStatus: (id: string, status: TaskStatus) => void;
   onUpdateTaskOwner: (id: string, owner: string) => void;
+  onUpdateTaskAssignees: (id: string, assignees: string[]) => void;
+  onUpdateProjectMembers: (id: string, members: string[]) => void;
+  onAddTaskComment: (id: string, body: string) => void;
+  onAddProjectComment: (id: string, body: string) => void;
   ownerOptions: string[];
   onUpdateUserAccess: (id: string, access: TeamUser["access"]) => void;
   onUpdateUserStatus: (id: string, status: TeamUser["status"]) => void;
@@ -3440,6 +3840,7 @@ function DetailDrawer({
     const dueState = getTaskDueState(task);
     const allowedStatuses = getAllowedTaskStatuses(task);
     const taskNeedsPrivateDetailCleanup = !task.privateDetailsClear || hasPrivateDetailsRisk(task.title);
+    const assigneeOptions = ownerOptions.filter((option) => option !== task.owner);
 
     return (
       <Drawer open title={task.id} description={task.title} onClose={onClose}>
@@ -3470,6 +3871,20 @@ function DetailDrawer({
               onChange={(owner) => onUpdateTaskOwner(task.id, owner)}
             />
           </div>
+          <div className="hdx-subpanel p-3">
+            <p className="text-xs font-semibold uppercase text-[#717970]">Additional people</p>
+            <div className="mt-2">
+              <PeopleList people={task.assignees} emptyLabel="Only the owner is assigned right now." />
+            </div>
+          </div>
+          <PeopleEditor
+            key={`task-people-${task.id}-${task.assignees.join("|")}`}
+            label="Edit additional people"
+            options={assigneeOptions}
+            selected={task.assignees}
+            onSubmit={(assignees) => onUpdateTaskAssignees(task.id, assignees)}
+          />
+          <CommentPanel comments={task.commentItems} onSubmit={(body) => onAddTaskComment(task.id, body)} />
         </div>
       </Drawer>
     );
@@ -3482,6 +3897,12 @@ function DetailDrawer({
       <Drawer open title={project.name} description={`${project.area} / ${project.stage}`} onClose={onClose}>
         <div className="grid gap-4">
           <DetailRow label="Owner" value={project.owner} />
+          <div className="hdx-subpanel p-3">
+            <p className="text-xs font-semibold uppercase text-[#717970]">Additional people</p>
+            <div className="mt-2">
+              <PeopleList people={project.members} emptyLabel="Only the owner is attached right now." />
+            </div>
+          </div>
           <DetailRow label="Risk" value={project.risk} />
           <DetailRow label="Work items" value={project.workItems.toString()} />
           <DetailRow label="Target date" value={project.targetDate} />
@@ -3489,6 +3910,14 @@ function DetailDrawer({
             <p className="text-xs font-semibold uppercase text-[#717970]">Progress</p>
             <ProgressBar value={project.progress} />
           </div>
+          <PeopleEditor
+            key={`project-people-${project.id}-${project.members.join("|")}`}
+            label="Edit additional people"
+            options={ownerOptions.filter((option) => option !== project.owner)}
+            selected={project.members}
+            onSubmit={(members) => onUpdateProjectMembers(project.id, members)}
+          />
+          <CommentPanel comments={project.commentItems} onSubmit={(body) => onAddProjectComment(project.id, body)} />
         </div>
       </Drawer>
     );
@@ -3696,6 +4125,10 @@ function TaskBoard({
                       <p className="font-semibold text-[#006D34]">{task.id}</p>
                       <p>{task.project}</p>
                       <p>{task.workstream}</p>
+                      <p>
+                        {task.owner}
+                        {task.assignees.length > 0 ? ` + ${task.assignees.length}` : ""}
+                      </p>
                     </div>
 
                     <div className="mt-3 grid gap-2">
@@ -3766,6 +4199,9 @@ function ProjectCard({
   compact?: boolean;
   onOpen?: () => void;
 }) {
+  const ownerSummary =
+    project.members.length > 0 ? `${project.owner} + ${project.members.length}` : project.owner;
+
   return (
     <article className="rounded-md border border-[#C1C9BE]/55 bg-white p-4">
       <div className="flex items-start justify-between gap-4">
@@ -3787,9 +4223,10 @@ function ProjectCard({
         <ProgressBar value={project.progress} />
       </div>
 
-      <div className={`mt-4 grid gap-3 text-sm ${compact ? "grid-cols-2" : "grid-cols-3"}`}>
-        <MiniStat label="Owner" value={project.owner} />
+      <div className={`mt-4 grid gap-3 text-sm ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
+        <MiniStat label="Owner" value={ownerSummary} />
         <MiniStat label="Work items" value={project.workItems.toString()} />
+        {!compact ? <MiniStat label="Comments" value={project.comments.toString()} /> : null}
         {!compact ? <MiniStat label="Target" value={project.targetDate} /> : null}
       </div>
       {onOpen ? (

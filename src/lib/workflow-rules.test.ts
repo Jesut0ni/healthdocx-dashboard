@@ -26,10 +26,12 @@ function task(overrides: Partial<Task> = {}): Task {
     project: "Internal setup",
     workstream: "Security",
     owner: "Owner",
+    assignees: [],
     status: "Backlog",
     priority: "High",
     due: "Jul 16",
     comments: 0,
+    commentItems: [],
     privateDetailsClear: true,
     ...overrides,
   };

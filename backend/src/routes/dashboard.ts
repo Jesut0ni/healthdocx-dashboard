@@ -68,6 +68,7 @@ dashboardRouter.get("/dashboard/bootstrap", async (_request, response) => {
     users: userRows.map((user) => ({
       id: user.id,
       name: user.displayName,
+      shortName: user.shortName,
       role: user.role,
       team: user.team,
       access: user.access,

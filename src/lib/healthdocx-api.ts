@@ -59,6 +59,14 @@ export type AuthSession = {
   };
 };
 
+export type BootstrapAdminInput = {
+  displayName: string;
+  email: string;
+  role: string;
+  team: TeamUser["team"];
+  accessCode: string;
+};
+
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   (process.env.NODE_ENV === "production" ? "" : "http://localhost:4000");
@@ -126,6 +134,17 @@ export function loginToBackend(email: string, accessCode: string) {
   return request<AuthSession>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, accessCode }),
+  });
+}
+
+export function fetchAuthBootstrapStatus() {
+  return request<{ hasUsers: boolean }>("/api/auth/bootstrap-status");
+}
+
+export function bootstrapFirstAdmin(input: BootstrapAdminInput) {
+  return request<AuthSession>("/api/auth/bootstrap-admin", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

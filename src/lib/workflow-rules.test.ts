@@ -25,7 +25,7 @@ function task(overrides: Partial<Task> = {}): Task {
     title: "Validate encrypted storage retention settings",
     project: "Internal setup",
     workstream: "Security",
-    owner: "Terry",
+    owner: "Owner",
     status: "Backlog",
     priority: "High",
     due: "Jul 16",

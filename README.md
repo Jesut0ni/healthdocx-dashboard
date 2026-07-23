@@ -64,11 +64,11 @@ npm run db:seed
 npm run backend:dev
 ```
 
-`npm run db:seed` and `npm run db:reset-live` intentionally reset dashboard data. They delete tasks, projects, work batches, integrations, docs, reminder logs, and audit history, then recreate only the six approved HealthDocX users and clean email reminder schedules. Use this before the first production deploy when the database must start fresh.
+`npm run db:seed` and `npm run db:reset-live` intentionally reset the dashboard to a blank live workspace. They delete users, tasks, projects, work batches, integrations, docs, reminder rules, reminder logs, and audit history. Use this before the first production deploy only when the database must start fresh.
 
 The frontend defaults to `http://localhost:4000` for API calls during local development and uses same-origin `/api` calls in production. Set `NEXT_PUBLIC_API_BASE_URL` only if the backend is deployed to a separate URL.
 
-Login uses each seeded team member email, such as `terry@healthdocx.org`, plus the shared `APP_ACCESS_CODE` from `backend/.env`.
+When the database has no users, the login screen switches to first-admin setup. Create the first owner with their real name, email, role, team, and the shared `APP_ACCESS_CODE`. After that, sign in with that email and invite the remaining team members from Access.
 
 Email reminders use Maileroo first when `MAILEROO_API_KEY` and `MAILEROO_FROM_EMAIL` are set in `backend/.env`. Optional `MAILEROO_FROM_NAME` controls the display name. SMTP settings, if present, are used only as a fallback: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, and optional `SMTP_SECURE`. If neither Maileroo nor SMTP is configured, reminder sends are still logged but no email leaves the system.
 
@@ -104,6 +104,8 @@ The Vercel cron endpoint is `GET /api/cron/reminders`. Vercel automatically send
 Useful backend endpoints:
 
 - `GET /health`
+- `GET /api/auth/bootstrap-status`
+- `POST /api/auth/bootstrap-admin`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `GET /api/dashboard/bootstrap`

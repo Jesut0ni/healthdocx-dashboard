@@ -70,6 +70,7 @@ export type KnowledgeDoc = {
 export type TeamUser = {
   id: string;
   name: string;
+  shortName?: string;
   role: string;
   team: "Engineering" | "Operations" | "Product" | "Security" | "Customer Success";
   access: "Owner" | "Admin" | "Reviewer" | "Editor" | "Viewer";
@@ -83,56 +84,3 @@ export type AuditEvent = {
   area: "Access" | "Project Ops" | "Integrations" | "Docs" | "Projects";
   time: string;
 };
-
-export const assignees = ["Terry", "Toni", "Kene", "Peace", "David", "Chimaobi"];
-
-export const users: TeamUser[] = [
-  {
-    id: "USR-01",
-    name: "Terry",
-    role: "Product Lead",
-    team: "Product",
-    access: "Admin",
-    status: "Active",
-  },
-  {
-    id: "USR-02",
-    name: "Toni",
-    role: "Implementation Manager",
-    team: "Operations",
-    access: "Editor",
-    status: "Active",
-  },
-  {
-    id: "USR-03",
-    name: "Kene",
-    role: "Security Engineer",
-    team: "Security",
-    access: "Owner",
-    status: "Active",
-  },
-  {
-    id: "USR-04",
-    name: "Peace",
-    role: "Integration Engineer",
-    team: "Engineering",
-    access: "Editor",
-    status: "Active",
-  },
-  {
-    id: "USR-05",
-    name: "Chimaobi",
-    role: "Reviewer",
-    team: "Product",
-    access: "Reviewer",
-    status: "Active",
-  },
-  {
-    id: "USR-06",
-    name: "David",
-    role: "Customer Success",
-    team: "Customer Success",
-    access: "Viewer",
-    status: "Invited",
-  },
-];

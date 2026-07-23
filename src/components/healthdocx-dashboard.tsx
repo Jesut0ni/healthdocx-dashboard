@@ -48,12 +48,14 @@ import {
   Toast,
 } from "@/components/healthdocx-ui";
 import {
+  bootstrapFirstAdmin,
   clearAuthSession,
   createBackendDoc,
   createBackendIntegration,
   createBackendProject,
   createBackendTask,
   createBackendWorkBatch,
+  fetchAuthBootstrapStatus,
   fetchCurrentAuthSession,
   fetchDashboardBootstrap,
   getStoredAuthSession,
@@ -69,12 +71,12 @@ import {
 } from "@/lib/healthdocx-api";
 import type {
   AuthSession,
+  BootstrapAdminInput,
   DashboardBootstrap,
   ReminderChannel,
   ReminderLog,
   ReminderRule,
 } from "@/lib/healthdocx-api";
-import { assignees, users as initialUsers } from "@/lib/healthdocx-data";
 import type {
   AuditEvent,
   Project,
@@ -207,7 +209,16 @@ const accessOptions: TeamUser["access"][] = [
 const userStatusOptions: TeamUser["status"][] = ["Active", "Invited", "Suspended"];
 const reminderCadenceOptions: ReminderCadence[] = ["Daily", "Twice a day", "Weekly"];
 const reminderChannelOptions: ReminderChannel[] = ["Email"];
-const initialReminderRules: ReminderRule[] = assignees.map((owner, index) => {
+
+function firstName(value: string) {
+  return value.trim().split(/\s+/)[0] || value.trim();
+}
+
+function ownerKey(user: TeamUser) {
+  return user.shortName ?? firstName(user.name);
+}
+
+function createDefaultReminderRule(owner: string, index = 0): ReminderRule {
   const cadence = reminderCadenceOptions[index % reminderCadenceOptions.length] ?? "Daily";
 
   return {
@@ -218,7 +229,7 @@ const initialReminderRules: ReminderRule[] = assignees.map((owner, index) => {
     nextRun: nextReminderRun(cadence),
     lastSent: "Not sent",
   };
-});
+}
 
 const priorityStyles: Record<Priority, string> = {
   Critical: "border-red-200 bg-red-50 text-red-700",
@@ -455,13 +466,20 @@ function BackendSyncBadge({ status, message }: { status: BackendStatus; message:
 function LoginScreen({
   loading,
   error,
+  setupMode,
   onLogin,
+  onBootstrapAdmin,
 }: {
   loading: boolean;
   error: string;
+  setupMode: boolean;
   onLogin: (email: string, accessCode: string) => void;
+  onBootstrapAdmin: (input: BootstrapAdminInput) => void;
 }) {
-  const [email, setEmail] = useState("terry@healthdocx.org");
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("");
+  const [team, setTeam] = useState<TeamUser["team"]>("Operations");
   const [accessCode, setAccessCode] = useState("");
 
   return (
@@ -480,23 +498,47 @@ function LoginScreen({
           </div>
           <div>
             <p className="text-lg font-extrabold text-[#07160F]">HealthDocX</p>
-            <p className="text-xs font-bold uppercase text-[#008943]">Team dashboard login</p>
+            <p className="text-xs font-bold uppercase text-[#008943]">
+              {setupMode ? "First admin setup" : "Team dashboard login"}
+            </p>
           </div>
         </div>
 
         <form
           onSubmit={(event) => {
             event.preventDefault();
+            if (setupMode) {
+              onBootstrapAdmin({ displayName, email, role, team, accessCode });
+              return;
+            }
+
             onLogin(email, accessCode);
           }}
           className="mt-5 grid gap-4"
         >
           <InlineNotice
             tone="green"
-            title="Team access"
-            detail="Use your HealthDocX team email and the shared internal dashboard access code."
+            title={setupMode ? "Fresh workspace" : "Team access"}
+            detail={
+              setupMode
+                ? "No users exist yet. Create the first owner account with the shared internal dashboard access code."
+                : "Use your HealthDocX team email and the shared internal dashboard access code."
+            }
           />
-          {error ? <InlineNotice tone="red" title="Login failed" detail={error} /> : null}
+          {error ? (
+            <InlineNotice
+              tone="red"
+              title={setupMode ? "Setup failed" : "Login failed"}
+              detail={error}
+            />
+          ) : null}
+          {setupMode ? (
+            <>
+              <TextField label="Full name" value={displayName} onChange={setDisplayName} required />
+              <TextField label="Role" value={role} onChange={setRole} required />
+              <SelectField label="Team" value={team} options={teamOptions} onChange={setTeam} />
+            </>
+          ) : null}
           <TextField label="Email" value={email} onChange={setEmail} type="email" required />
           <TextField
             label="Access code"
@@ -511,7 +553,7 @@ function LoginScreen({
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[#008943] px-4 text-sm font-semibold text-white shadow-sm shadow-[#008943]/20 transition hover:bg-[#006D34] disabled:cursor-not-allowed disabled:opacity-70"
           >
             <LockKeyhole className="h-4 w-4" />
-            {loading ? "Signing in" : "Sign in"}
+            {loading ? (setupMode ? "Creating admin" : "Signing in") : setupMode ? "Create first admin" : "Sign in"}
           </button>
         </form>
       </section>
@@ -534,22 +576,23 @@ export function HealthDocXDashboard() {
   const [authReady, setAuthReady] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [needsFirstAdmin, setNeedsFirstAdmin] = useState(false);
   const [activeView, setActiveView] = useState<View>("command");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectItems, setProjectItems] = useState<Project[]>([]);
   const [workBatchItems, setWorkBatchItems] = useState<WorkBatch[]>([]);
   const [integrationItems, setIntegrationItems] = useState<Integration[]>([]);
   const [docItems, setDocItems] = useState<KnowledgeDoc[]>([]);
-  const [userItems, setUserItems] = useState<TeamUser[]>(initialUsers);
+  const [userItems, setUserItems] = useState<TeamUser[]>([]);
   const [auditItems, setAuditItems] = useState<AuditEvent[]>([]);
-  const [reminderRules, setReminderRules] = useState<ReminderRule[]>(initialReminderRules);
+  const [reminderRules, setReminderRules] = useState<ReminderRule[]>([]);
   const [reminderLogs, setReminderLogs] = useState<ReminderLog[]>([]);
   const [query, setQuery] = useState("");
   const [priority, setPriority] = useState<Priority | "All">("All");
   const [projectFilter, setProjectFilter] = useState<string>("All");
   const [ownerFilter, setOwnerFilter] = useState<string>("All");
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
-  const [selectedReminderOwner, setSelectedReminderOwner] = useState(assignees[0]);
+  const [selectedReminderOwner, setSelectedReminderOwner] = useState("");
   const [detailSelection, setDetailSelection] = useState<DetailSelection>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<{
@@ -560,27 +603,46 @@ export function HealthDocXDashboard() {
   } | null>(null);
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("syncing");
   const [backendMessage, setBackendMessage] = useState("Connecting to backend");
+  const ownerOptions = useMemo(() => {
+    const owners = userItems.map(ownerKey).filter(Boolean);
+    return Array.from(new Set(owners));
+  }, [userItems]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      const storedSession = getStoredAuthSession();
+      void (async () => {
+        const storedSession = getStoredAuthSession();
 
-      if (!storedSession) {
-        setAuthReady(true);
-        return;
-      }
+        if (!storedSession) {
+          try {
+            const status = await fetchAuthBootstrapStatus();
+            setNeedsFirstAdmin(!status.hasUsers);
+          } catch {
+            setNeedsFirstAdmin(false);
+          }
 
-      fetchCurrentAuthSession()
-        .then(() => {
+          setAuthReady(true);
+          return;
+        }
+
+        try {
+          await fetchCurrentAuthSession();
           setAuthSession(storedSession);
-        })
-        .catch(() => {
+          setNeedsFirstAdmin(false);
+        } catch {
           clearAuthSession();
           setAuthSession(null);
-        })
-        .finally(() => {
+
+          try {
+            const status = await fetchAuthBootstrapStatus();
+            setNeedsFirstAdmin(!status.hasUsers);
+          } catch {
+            setNeedsFirstAdmin(false);
+          }
+        } finally {
           setAuthReady(true);
-        });
+        }
+      })();
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -594,14 +656,18 @@ export function HealthDocXDashboard() {
     setDocItems(data.docs);
     setUserItems(data.users);
     setAuditItems(data.auditEvents);
-    setReminderRules(data.reminderRules.length > 0 ? data.reminderRules : initialReminderRules);
+    setReminderRules(
+      data.reminderRules.length > 0
+        ? data.reminderRules
+        : data.users.map((user, index) => createDefaultReminderRule(ownerKey(user), index)),
+    );
     setReminderLogs(data.reminderLogs);
     setSelectedReminderOwner((current) => {
       const owners =
         data.reminderRules.length > 0
           ? data.reminderRules.map((rule) => rule.owner)
-          : initialReminderRules.map((rule) => rule.owner);
-      return owners.includes(current) ? current : owners[0] ?? assignees[0];
+          : data.users.map(ownerKey);
+      return owners.includes(current) ? current : owners[0] ?? "";
     });
   }, []);
 
@@ -647,6 +713,28 @@ export function HealthDocXDashboard() {
       const session = await loginToBackend(email, accessCode);
       storeAuthSession(session);
       setAuthSession(session);
+      setNeedsFirstAdmin(false);
+      setBackendStatus("syncing");
+      setBackendMessage("Connecting to backend");
+    } catch (error) {
+      setLoginError(formatBackendError(error));
+      clearAuthSession();
+      setAuthSession(null);
+    } finally {
+      setLoginLoading(false);
+      setAuthReady(true);
+    }
+  }
+
+  async function handleBootstrapAdmin(input: BootstrapAdminInput) {
+    setLoginLoading(true);
+    setLoginError("");
+
+    try {
+      const session = await bootstrapFirstAdmin(input);
+      storeAuthSession(session);
+      setAuthSession(session);
+      setNeedsFirstAdmin(false);
       setBackendStatus("syncing");
       setBackendMessage("Connecting to backend");
     } catch (error) {
@@ -692,11 +780,11 @@ export function HealthDocXDashboard() {
 
   const openTasks = tasks.filter((task) => task.status !== "Done");
   const pendingTasksByOwner = useMemo(() => {
-    return assignees.reduce<Record<string, Task[]>>((ownerMap, owner) => {
+    return ownerOptions.reduce<Record<string, Task[]>>((ownerMap, owner) => {
       ownerMap[owner] = tasks.filter((task) => task.owner === owner && task.status !== "Done");
       return ownerMap;
     }, {});
-  }, [tasks]);
+  }, [ownerOptions, tasks]);
   const blockedTasks = tasks.filter((task) => task.status === "Blocked");
   const reviewTasks = tasks.filter((task) => task.status === "Review");
   const totalWorkItems = projectItems.reduce((sum, project) => sum + project.workItems, 0);
@@ -1218,7 +1306,15 @@ export function HealthDocXDashboard() {
   }
 
   if (!authSession) {
-    return <LoginScreen loading={loginLoading} error={loginError} onLogin={handleLogin} />;
+    return (
+      <LoginScreen
+        loading={loginLoading}
+        error={loginError}
+        setupMode={needsFirstAdmin}
+        onLogin={handleLogin}
+        onBootstrapAdmin={handleBootstrapAdmin}
+      />
+    );
   }
 
   return (
@@ -1384,6 +1480,7 @@ export function HealthDocXDashboard() {
                 priority={priority}
                 projectFilter={projectFilter}
                 ownerFilter={ownerFilter}
+                ownerOptions={ownerOptions}
                 onCreateTask={() => setActiveModal("task")}
                 onPriorityChange={handlePriorityChange}
                 onProjectChange={setProjectFilter}
@@ -1448,6 +1545,7 @@ export function HealthDocXDashboard() {
       <CreateEntityModal
         activeModal={activeModal}
         projects={projectItems}
+        ownerOptions={ownerOptions}
         reminderOwner={selectedReminderOwner}
         reminderRules={reminderRules}
         onClose={() => setActiveModal(null)}
@@ -1464,6 +1562,7 @@ export function HealthDocXDashboard() {
         onClose={() => setDetailSelection(null)}
         onUpdateTaskStatus={updateTaskStatus}
         onUpdateTaskOwner={updateTaskOwner}
+        ownerOptions={ownerOptions}
         onUpdateUserAccess={updateUserAccess}
         onUpdateUserStatus={updateUserStatus}
       />
@@ -1792,6 +1891,7 @@ function TasksView({
   priority,
   projectFilter,
   ownerFilter,
+  ownerOptions,
   onCreateTask,
   onPriorityChange,
   onProjectChange,
@@ -1806,6 +1906,7 @@ function TasksView({
   priority: Priority | "All";
   projectFilter: string;
   ownerFilter: string;
+  ownerOptions: string[];
   onCreateTask: () => void;
   onPriorityChange: (event: ChangeEvent<HTMLSelectElement>) => void;
   onProjectChange: (project: string) => void;
@@ -1861,7 +1962,7 @@ function TasksView({
               className="hdx-control h-9 px-3 text-sm"
             >
               <option>All</option>
-              {assignees.map((owner) => (
+              {ownerOptions.map((owner) => (
                 <option key={owner}>{owner}</option>
               ))}
             </select>
@@ -1875,6 +1976,7 @@ function TasksView({
           onCreateTask={onCreateTask}
           onStatusChange={onStatusChange}
           onOwnerChange={onOwnerChange}
+          ownerOptions={ownerOptions}
           onOpenDetail={onOpenDetail}
         />
       </section>
@@ -2702,6 +2804,7 @@ function UsersView({
 function CreateEntityModal({
   activeModal,
   projects,
+  ownerOptions,
   reminderOwner,
   reminderRules,
   onClose,
@@ -2715,6 +2818,7 @@ function CreateEntityModal({
 }: {
   activeModal: ActiveModal;
   projects: Project[];
+  ownerOptions: string[];
   reminderOwner: string;
   reminderRules: ReminderRule[];
   onClose: () => void;
@@ -2747,10 +2851,18 @@ function CreateEntityModal({
     return <ProjectRequiredModal onClose={onClose} />;
   }
 
+  if (
+    ownerOptions.length === 0 &&
+    (activeModal === "task" || activeModal === "project" || activeModal === "doc")
+  ) {
+    return <UserRequiredModal onClose={onClose} />;
+  }
+
   if (activeModal === "task") {
     return (
       <TaskFormModal
         projects={projectNames}
+        ownerOptions={ownerOptions}
         onClose={onClose}
         onSubmit={onCreateTask}
       />
@@ -2758,7 +2870,13 @@ function CreateEntityModal({
   }
 
   if (activeModal === "project") {
-    return <ProjectFormModal onClose={onClose} onSubmit={onCreateProject} />;
+    return (
+      <ProjectFormModal
+        ownerOptions={ownerOptions}
+        onClose={onClose}
+        onSubmit={onCreateProject}
+      />
+    );
   }
 
   if (activeModal === "batch") {
@@ -2782,7 +2900,7 @@ function CreateEntityModal({
   }
 
   if (activeModal === "doc") {
-    return <DocFormModal onClose={onClose} onSubmit={onCreateDoc} />;
+    return <DocFormModal ownerOptions={ownerOptions} onClose={onClose} onSubmit={onCreateDoc} />;
   }
 
   if (activeModal === "user") {
@@ -2826,6 +2944,30 @@ function ProjectRequiredModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+function UserRequiredModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal
+      open
+      title="Create a user first"
+      description="Tasks, projects, and documents need a real owner."
+      onClose={onClose}
+    >
+      <div className="grid gap-4">
+        <InlineNotice
+          tone="green"
+          title="Fresh workspace"
+          detail="Create the first admin on the login screen, then invite the correct team members from Access."
+        />
+        <div className="flex justify-end">
+          <PrimaryButton icon={<ArrowRight className="h-4 w-4" />} onClick={onClose}>
+            Go back
+          </PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ModalActions({ onCancel }: { onCancel: () => void }) {
   return (
     <div className="mt-5 flex justify-end gap-2 border-t border-[#C1C9BE]/70 pt-4">
@@ -2841,17 +2983,19 @@ function ModalActions({ onCancel }: { onCancel: () => void }) {
 
 function TaskFormModal({
   projects,
+  ownerOptions,
   onClose,
   onSubmit,
 }: {
   projects: string[];
+  ownerOptions: string[];
   onClose: () => void;
   onSubmit: (input: Omit<Task, "id" | "comments">) => void;
 }) {
   const [title, setTitle] = useState("");
   const [project, setProject] = useState(projects[0] ?? "");
   const [workstream, setWorkstream] = useState<Task["workstream"]>("Project Ops");
-  const [owner, setOwner] = useState(assignees[0]);
+  const [owner, setOwner] = useState(ownerOptions[0] ?? "");
   const [priority, setPriority] = useState<Priority>("High");
   const [due, setDue] = useState("Jul 30");
   const [privateDetailsClear, setPrivateDetailsClear] = useState(true);
@@ -2906,7 +3050,7 @@ function TaskFormModal({
         <div className="grid gap-4 md:grid-cols-2">
           <SelectField label="Project" value={project} options={projects} onChange={setProject} />
           <SelectField label="Workstream" value={workstream} options={workstreamOptions} onChange={setWorkstream} />
-          <SelectField label="Owner" value={owner} options={assignees} onChange={setOwner} />
+          <SelectField label="Owner" value={owner} options={ownerOptions} onChange={setOwner} />
           <SelectField label="Priority" value={priority} options={priorityOptions} onChange={setPriority} />
           <TextField label="Due date" value={due} onChange={setDue} required />
           <CheckboxField label="No private details in task text" checked={privateDetailsClear} onChange={setPrivateDetailsClear} />
@@ -2918,16 +3062,18 @@ function TaskFormModal({
 }
 
 function ProjectFormModal({
+  ownerOptions,
   onClose,
   onSubmit,
 }: {
+  ownerOptions: string[];
   onClose: () => void;
   onSubmit: (input: Omit<Project, "id">) => void;
 }) {
   const [name, setName] = useState("");
   const [area, setArea] = useState("Operations");
   const [stage, setStage] = useState<Project["stage"]>("Planning");
-  const [owner, setOwner] = useState(assignees[0]);
+  const [owner, setOwner] = useState(ownerOptions[0] ?? "");
   const [risk, setRisk] = useState<Risk>("Healthy");
   const [workItems, setWorkItems] = useState("1");
   const [progress, setProgress] = useState("5");
@@ -2960,7 +3106,7 @@ function ProjectFormModal({
         <div className="grid gap-4 md:grid-cols-2">
           <TextField label="Area" value={area} onChange={setArea} required />
           <SelectField label="Stage" value={stage} options={stageOptions} onChange={setStage} />
-          <SelectField label="Owner" value={owner} options={assignees} onChange={setOwner} />
+          <SelectField label="Owner" value={owner} options={ownerOptions} onChange={setOwner} />
           <SelectField label="Risk" value={risk} options={riskOptions} onChange={setRisk} />
           <TextField label="Work items" value={workItems} onChange={setWorkItems} type="number" />
           <TextField label="Progress %" value={progress} onChange={setProgress} type="number" />
@@ -3053,15 +3199,17 @@ function IntegrationFormModal({
 }
 
 function DocFormModal({
+  ownerOptions,
   onClose,
   onSubmit,
 }: {
+  ownerOptions: string[];
   onClose: () => void;
   onSubmit: (input: Omit<KnowledgeDoc, "id" | "updated">) => void;
 }) {
   const [title, setTitle] = useState("");
   const [area, setArea] = useState<KnowledgeDoc["area"]>("Runbook");
-  const [owner, setOwner] = useState(assignees[0]);
+  const [owner, setOwner] = useState(ownerOptions[0] ?? "");
   const [status, setStatus] = useState<KnowledgeDoc["status"]>("Draft");
 
   return (
@@ -3076,7 +3224,7 @@ function DocFormModal({
         <TextField label="Document title" value={title} onChange={setTitle} required />
         <div className="grid gap-4 md:grid-cols-2">
           <SelectField label="Area" value={area} options={docAreaOptions} onChange={setArea} />
-          <SelectField label="Owner" value={owner} options={assignees} onChange={setOwner} />
+          <SelectField label="Owner" value={owner} options={ownerOptions} onChange={setOwner} />
           <SelectField label="Status" value={status} options={docStatusOptions} onChange={setStatus} />
         </div>
         <ModalActions onCancel={onClose} />
@@ -3198,6 +3346,7 @@ function DetailDrawer({
   onClose,
   onUpdateTaskStatus,
   onUpdateTaskOwner,
+  ownerOptions,
   onUpdateUserAccess,
   onUpdateUserStatus,
 }: {
@@ -3205,6 +3354,7 @@ function DetailDrawer({
   onClose: () => void;
   onUpdateTaskStatus: (id: string, status: TaskStatus) => void;
   onUpdateTaskOwner: (id: string, owner: string) => void;
+  ownerOptions: string[];
   onUpdateUserAccess: (id: string, access: TeamUser["access"]) => void;
   onUpdateUserStatus: (id: string, status: TeamUser["status"]) => void;
 }) {
@@ -3243,7 +3393,7 @@ function DetailDrawer({
             <SelectField
               label="Owner"
               value={task.owner}
-              options={assignees}
+              options={ownerOptions}
               onChange={(owner) => onUpdateTaskOwner(task.id, owner)}
             />
           </div>
@@ -3393,12 +3543,14 @@ function TaskBoard({
   onCreateTask,
   onStatusChange,
   onOwnerChange,
+  ownerOptions,
   onOpenDetail,
 }: {
   tasks: Task[];
   onCreateTask: () => void;
   onStatusChange: (id: string, status: TaskStatus) => void;
   onOwnerChange: (id: string, owner: string) => void;
+  ownerOptions: string[];
   onOpenDetail: (id: string) => void;
 }) {
   if (tasks.length === 0) {
@@ -3490,7 +3642,7 @@ function TaskBoard({
                         onChange={(event) => onOwnerChange(task.id, event.target.value)}
                         className="hdx-control h-9 px-2 text-xs font-semibold"
                       >
-                        {assignees.map((owner) => (
+                        {ownerOptions.map((owner) => (
                           <option key={owner}>{owner}</option>
                         ))}
                       </select>

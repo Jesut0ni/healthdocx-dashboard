@@ -1,12 +1,13 @@
 import { eq } from "drizzle-orm";
 import { Router } from "express";
 import { getDb } from "../db/client";
-import { users } from "../db/schema";
+import { reminderRules, users } from "../db/schema";
 import {
   accessValues,
   firstName,
   isOneOf,
   makeId,
+  nextReminderRun,
   teamValues,
   userStatusValues,
 } from "../lib/domain";
@@ -56,6 +57,16 @@ usersRouter.post("/users", async (request, response) => {
       status: "Invited",
     })
     .returning();
+
+  await db.insert(reminderRules).values({
+    id: makeId("REM"),
+    ownerId: createdUser.id,
+    cadence: "Daily",
+    channel: "Email",
+    enabled: true,
+    nextRun: nextReminderRun("Daily"),
+    lastSent: "Not sent",
+  });
 
   await recordAuditEvent({
     actorId: createdUser.id,
